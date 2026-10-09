@@ -1,0 +1,16 @@
+services:
+  memory-api:
+    network_mode: host
+    ports: !reset []
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - 127.0.0.1
+      - --port
+      - "8080"
+      - --workers
+      - "2"
+    environment:
+      DATABASE_URL: postgresql://memory_app:${MEMORY_APP_PASSWORD:?Run sh scripts/setup-local.sh first}@127.0.0.1:5432/chat_memory
+      QDRANT_URL: http://127.0.0.1:6333

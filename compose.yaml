@@ -1,0 +1,91 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: chat_memory
+      POSTGRES_USER: memory_owner
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run sh scripts/setup-local.sh first}
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+      MEMORY_APP_PASSWORD: ${MEMORY_APP_PASSWORD:?Run sh scripts/setup-local.sh first}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init-app-role.sh:/docker-entrypoint-initdb.d/00-create-app-role.sh:ro
+      - ./postgres_chat_memory.sql:/docker-entrypoint-initdb.d/10-chat-memory.sql:ro
+      - ./agent_memory.sql:/docker-entrypoint-initdb.d/15-agent-memory.sql:ro
+      - ./docker/grants.sql:/docker-entrypoint-initdb.d/20-grants.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  qdrant:
+    image: qdrant/qdrant:v1.19.2
+    restart: unless-stopped
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:?Run sh scripts/setup-local.sh first}
+    ports:
+      - "127.0.0.1:${QDRANT_PORT:-6333}:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  memory-api:
+    build:
+      context: ./memory-api
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      DATABASE_URL: postgresql://memory_app:${MEMORY_APP_PASSWORD:?Run sh scripts/setup-local.sh first}@postgres:5432/chat_memory
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY:?Run sh scripts/setup-local.sh first}
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-agent-memory}
+      VECTOR_SIZE: ${VECTOR_SIZE:-1536}
+      MEMORY_ADMIN_TOKEN: ${MEMORY_ADMIN_TOKEN:?Run sh scripts/setup-local.sh first}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-https://api.openai.com/v1}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+    ports:
+      - "127.0.0.1:${MEMORY_API_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/ready', timeout=3)"
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  postgres_data:
+  qdrant_data:
+
+networks:
+  default:
+    name: chat-memory-net
